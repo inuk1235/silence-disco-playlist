@@ -493,7 +493,11 @@ async def search_tracks(request: SearchRequest):
 
 @api_router.post("/spotify/add-track")
 async def add_track(request: TrackRequest):
-    """Add a track using the 4th position rule (Free Queue)"""
+    """Add a track to Spotify queue (Free Queue)
+    
+    NOTE: Spotify API only allows adding to END of queue.
+    The 4th position rule is tracked internally for display purposes.
+    """
     try:
         # Check 1-hour no-repeat rule
         can_add, error_msg = await check_no_repeat_rule(request.track_uri)
@@ -504,23 +508,7 @@ async def add_track(request: TrackRequest):
         if await is_in_managed_queue(request.track_uri):
             raise HTTPException(status_code=400, detail="This song is already in the queue!")
         
-        # Get current Spotify queue length
-        queue_length = await get_spotify_queue_length()
-        
-        # Calculate position using 4th position rule
-        last_position = await get_last_request_position()
-        
-        if last_position == 0:
-            # First free request - insert at position 4
-            target_position = 4
-        else:
-            # Subsequent requests - last_position + 4
-            target_position = last_position + 4
-        
-        # If calculated position > queue length + 1, append at end
-        actual_position = min(target_position, queue_length + 1)
-        
-        # Add to Spotify queue (always goes to end)
+        # Add to Spotify queue (always goes to end - API limitation)
         add_response = await spotify_request(
             'POST',
             f'/me/player/queue?uri={urllib.parse.quote(request.track_uri)}'
@@ -530,8 +518,14 @@ async def add_track(request: TrackRequest):
             logger.error(f"Add track error: {add_response.status_code} - {add_response.text}")
             raise HTTPException(status_code=400, detail="Failed to add track to queue")
         
-        # Update last request position to the actual position
-        await set_last_request_position(actual_position)
+        # Track the request position for internal logic
+        last_position = await get_last_request_position()
+        if last_position == 0:
+            target_position = 4
+        else:
+            target_position = last_position + 4
+        
+        await set_last_request_position(target_position)
         
         # Add to our managed queue
         await add_to_managed_queue(
@@ -539,7 +533,7 @@ async def add_track(request: TrackRequest):
             track_name=request.track_name or "Unknown",
             artist=request.artist or "Unknown",
             album_art=request.album_art or "",
-            position=actual_position,
+            position=target_position,
             is_priority=False
         )
         
@@ -549,12 +543,11 @@ async def add_track(request: TrackRequest):
         # Cleanup old entries
         await cleanup_old_queue_entries()
         
-        logger.info(f"Free queue: Added track at position {actual_position} (last_position was {last_position}, queue_length was {queue_length})")
+        logger.info(f"Free queue: Added track (goes to end of Spotify queue)")
         
         return {
             "success": True, 
-            "position": actual_position, 
-            "message": f"Added to queue at position {actual_position}!"
+            "message": "Track added to queue!"
         }
     except HTTPException:
         raise
