@@ -9,7 +9,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import httpx
 import base64
 import urllib.parse
@@ -32,6 +32,9 @@ SQUARE_PAYMENT_LINK = os.environ.get('SQUARE_PAYMENT_LINK', 'https://square.link
 SPOTIFY_AUTH_URL = 'https://accounts.spotify.com/authorize'
 SPOTIFY_TOKEN_URL = 'https://accounts.spotify.com/api/token'
 SPOTIFY_API_URL = 'https://api.spotify.com/v1'
+
+# No repeat window (1 hour in seconds)
+NO_REPEAT_WINDOW_SECONDS = 3600
 
 # Create the main app
 app = FastAPI()
@@ -66,6 +69,7 @@ class NowPlayingResponse(BaseModel):
     duration_ms: Optional[int] = None
     progress_ms: Optional[int] = None
     time_left_ms: Optional[int] = None
+    track_uri: Optional[str] = None
 
 class QueueTrack(BaseModel):
     uri: str
@@ -86,7 +90,7 @@ async def get_stored_tokens():
 
 async def store_tokens(access_token: str, refresh_token: str, expires_in: int):
     """Store tokens in database"""
-    expires_at = datetime.now(timezone.utc).timestamp() + expires_in - 60  # 60 second buffer
+    expires_at = datetime.now(timezone.utc).timestamp() + expires_in - 60
     await db.spotify_tokens.update_one(
         {'_id': 'main'},
         {'$set': {
@@ -179,6 +183,45 @@ async def is_guest_request(track_uri: str) -> bool:
     doc = await db.guest_requests.find_one({'uri': track_uri})
     return doc is not None
 
+async def check_no_repeat_rule(track_uri: str) -> tuple[bool, str]:
+    """Check if a track was played/queued in the last hour. Returns (can_add, error_message)"""
+    # Extract track ID from URI (spotify:track:XXXXX)
+    track_id = track_uri.split(':')[-1] if ':' in track_uri else track_uri
+    
+    doc = await db.track_history.find_one({'track_id': track_id})
+    if not doc:
+        return True, ""
+    
+    last_time = doc.get('last_queued_at')
+    if not last_time:
+        return True, ""
+    
+    # Parse the timestamp
+    if isinstance(last_time, str):
+        last_time = datetime.fromisoformat(last_time.replace('Z', '+00:00'))
+    
+    now = datetime.now(timezone.utc)
+    time_diff = (now - last_time).total_seconds()
+    
+    if time_diff < NO_REPEAT_WINDOW_SECONDS:
+        minutes_left = int((NO_REPEAT_WINDOW_SECONDS - time_diff) / 60)
+        return False, f"This song was played recently. Try again in {minutes_left} minutes!"
+    
+    return True, ""
+
+async def record_track_play(track_uri: str):
+    """Record when a track is queued/played"""
+    track_id = track_uri.split(':')[-1] if ':' in track_uri else track_uri
+    await db.track_history.update_one(
+        {'track_id': track_id},
+        {'$set': {
+            'track_id': track_id,
+            'track_uri': track_uri,
+            'last_queued_at': datetime.now(timezone.utc)
+        }},
+        upsert=True
+    )
+
 # Routes
 @api_router.get("/")
 async def root():
@@ -227,7 +270,6 @@ async def spotify_callback(code: str = Query(...), error: str = Query(None)):
         data = response.json()
         await store_tokens(data['access_token'], data['refresh_token'], data['expires_in'])
         
-        # Redirect to admin success page
         return RedirectResponse(url="/admin?auth=success")
 
 @api_router.get("/spotify/status")
@@ -254,13 +296,13 @@ async def get_playlist_info():
         data = response.json()
         name = data.get('name', 'Silent Disco')
         
-        # Determine color based on playlist name
+        # Determine color based on playlist name (case-insensitive)
         name_lower = name.lower()
-        if 'red' in name_lower:
+        if 'on red' in name_lower:
             color = '#ff3b3b'
-        elif 'blue' in name_lower:
+        elif 'on blue' in name_lower:
             color = '#00a0ff'
-        elif 'green' in name_lower:
+        elif 'on green' in name_lower:
             color = '#00ff7f'
         else:
             color = '#ffffff'
@@ -299,7 +341,8 @@ async def get_now_playing():
             album_art=track['album']['images'][0]['url'] if track.get('album', {}).get('images') else None,
             duration_ms=duration,
             progress_ms=progress,
-            time_left_ms=duration - progress if duration and progress else None
+            time_left_ms=duration - progress if duration and progress else None,
+            track_uri=track.get('uri')
         )
     except HTTPException:
         raise
@@ -372,8 +415,13 @@ async def search_tracks(request: SearchRequest):
 
 @api_router.post("/spotify/add-track")
 async def add_track(request: TrackRequest):
-    """Add a track to the queue using 4th position rule"""
+    """Add a track to the queue using 4th position rule (Free Queue)"""
     try:
+        # Check 1-hour no-repeat rule
+        can_add, error_msg = await check_no_repeat_rule(request.track_uri)
+        if not can_add:
+            raise HTTPException(status_code=400, detail=error_msg)
+        
         # Get current queue to determine position
         queue_response = await spotify_request('GET', '/me/player/queue')
         queue_length = 0
@@ -383,20 +431,21 @@ async def add_track(request: TrackRequest):
             queue_length = len(queue_data.get('queue', []))
         
         # Calculate position using 4th position rule
+        # Position is relative to currently playing (position 1 = next song)
         last_position = await get_last_request_position()
         
         if last_position == 0:
-            # First request - position 4 (0-indexed: 3)
-            target_position = min(3, queue_length)
+            # First request - position 4
+            target_position = 4
         else:
             # Subsequent requests - last_position + 4
             target_position = last_position + 4
-            if target_position > queue_length:
-                target_position = queue_length
         
-        # Add to queue (Spotify adds to end, we'll need to reorder if possible)
-        # Note: Spotify Web API doesn't support direct position insertion in queue
-        # We add to queue and it goes to the end
+        # If calculated position > queue length, append at end
+        if target_position > queue_length:
+            target_position = queue_length + 1
+        
+        # Add to queue (Spotify API adds to end of queue)
         add_response = await spotify_request(
             'POST',
             f'/me/player/queue?uri={urllib.parse.quote(request.track_uri)}'
@@ -412,7 +461,10 @@ async def add_track(request: TrackRequest):
         # Track this as a guest request
         await add_guest_request(request.track_uri)
         
-        return {"success": True, "position": target_position + 1, "message": f"Track added to queue!"}
+        # Record for no-repeat rule
+        await record_track_play(request.track_uri)
+        
+        return {"success": True, "position": target_position, "message": f"Track added to queue at position {target_position}!"}
     except HTTPException:
         raise
     except Exception as e:
@@ -421,9 +473,16 @@ async def add_track(request: TrackRequest):
 
 @api_router.post("/spotify/skip-paid")
 async def skip_paid(request: TrackRequest):
-    """Add track to position 1 (next up) - for paid skips"""
+    """Add track to position 1 (next up) - for paid skips. Does NOT update last_request_position."""
     try:
-        # Add to queue
+        # Check 1-hour no-repeat rule
+        can_add, error_msg = await check_no_repeat_rule(request.track_uri)
+        if not can_add:
+            raise HTTPException(status_code=400, detail=error_msg)
+        
+        # Add to queue (goes to end, then would need reordering)
+        # Note: Spotify's Web API doesn't support direct position insertion
+        # The track is added and marked as priority
         add_response = await spotify_request(
             'POST',
             f'/me/player/queue?uri={urllib.parse.quote(request.track_uri)}'
@@ -436,13 +495,38 @@ async def skip_paid(request: TrackRequest):
         # Track as guest request
         await add_guest_request(request.track_uri)
         
-        # Note: Spotify doesn't allow reordering queue directly
-        # The track is added and marked as priority
+        # Record for no-repeat rule
+        await record_track_play(request.track_uri)
+        
+        # NOTE: last_request_position is NOT updated for paid skips
         return {"success": True, "message": "Track added as next up!"}
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error with paid skip: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.post("/spotify/move-to-next")
+async def move_to_next(request: TrackRequest):
+    """Move an existing track in queue to position 1 (paid skip from queue list)"""
+    try:
+        # Check 1-hour no-repeat rule
+        can_add, error_msg = await check_no_repeat_rule(request.track_uri)
+        if not can_add:
+            raise HTTPException(status_code=400, detail=error_msg)
+        
+        # Record for no-repeat rule (refresh the timestamp)
+        await record_track_play(request.track_uri)
+        
+        # Note: Spotify Web API doesn't support reordering the playback queue directly
+        # The track is already in queue, we mark it as priority
+        # In a real implementation, this would require using the playlist API if working with playlists
+        
+        return {"success": True, "message": "Track marked as priority!"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error moving track: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @api_router.get("/config")

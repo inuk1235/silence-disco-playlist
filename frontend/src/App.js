@@ -122,7 +122,7 @@ const GuestPage = () => {
     return () => clearTimeout(timer);
   }, [searchQuery, handleSearch]);
 
-  // Add track to queue
+  // Add track to queue (Free Queue - 4th position rule)
   const addTrack = async (trackUri) => {
     try {
       const response = await axios.post(`${API}/spotify/add-track`, { track_uri: trackUri });
@@ -131,23 +131,40 @@ const GuestPage = () => {
       setSearchResults([]);
     } catch (e) {
       console.error("Error adding track:", e);
-      toast.error("Failed to add track");
+      const errorMsg = e.response?.data?.detail || "Failed to add track";
+      toast.error(errorMsg);
     }
   };
 
-  // Skip queue (paid)
+  // Skip queue (paid) - from search results
   const skipQueue = async (trackUri) => {
     // Open payment link
     window.open(squareLink, "_blank");
     // Add track as priority
     try {
-      await axios.post(`${API}/spotify/skip-paid`, { track_uri: trackUri });
-      toast.success("Track added as next up!");
+      const response = await axios.post(`${API}/spotify/skip-paid`, { track_uri: trackUri });
+      toast.success(response.data.message || "Track added as next up!");
       setSearchQuery("");
       setSearchResults([]);
     } catch (e) {
       console.error("Error with skip:", e);
-      toast.error("Failed to add track");
+      const errorMsg = e.response?.data?.detail || "Failed to add track";
+      toast.error(errorMsg);
+    }
+  };
+
+  // Move existing queue track to next (paid)
+  const moveToNext = async (trackUri) => {
+    // Open payment link
+    window.open(squareLink, "_blank");
+    // Move track to position 1
+    try {
+      const response = await axios.post(`${API}/spotify/move-to-next`, { track_uri: trackUri });
+      toast.success(response.data.message || "Track moved to next!");
+    } catch (e) {
+      console.error("Error moving track:", e);
+      const errorMsg = e.response?.data?.detail || "Failed to move track";
+      toast.error(errorMsg);
     }
   };
 
@@ -181,10 +198,7 @@ const GuestPage = () => {
       <Toaster position="top-center" theme="dark" />
       
       {/* Header */}
-      <header className="pt-6 pb-4 px-4 text-center">
-        <p className="text-sm font-medium mb-1" style={{ color: playlistInfo.color, fontFamily: "'Space Grotesk', sans-serif" }} data-testid="playlist-name">
-          Playlist: {playlistInfo.name}
-        </p>
+      <header className="pt-6 pb-2 px-4 text-center">
         <h1 className="text-3xl font-bold text-white mb-1" style={{ fontFamily: "'Space Grotesk', sans-serif" }} data-testid="app-title">
           Byron Bay Silent Disco
         </h1>
@@ -194,6 +208,21 @@ const GuestPage = () => {
       </header>
 
       <div className="max-w-lg mx-auto px-4 space-y-6">
+        {/* Playlist Name - Big and Centered above Now Playing */}
+        <div className="text-center">
+          <h2 
+            className="text-4xl font-bold"
+            style={{ 
+              color: playlistInfo.color, 
+              fontFamily: "'Space Grotesk', sans-serif",
+              textShadow: playlistInfo.color !== '#ffffff' ? `0 0 20px ${playlistInfo.color}40` : 'none'
+            }} 
+            data-testid="playlist-name"
+          >
+            {playlistInfo.name}
+          </h2>
+        </div>
+
         {/* Now Playing Card */}
         <Card 
           className="relative overflow-hidden bg-[#1a1a24] border-2 border-cyan-400/50 p-4"
@@ -238,7 +267,7 @@ const GuestPage = () => {
           ) : (
             <div className="text-center py-6">
               <Music className="w-12 h-12 mx-auto mb-2 text-gray-600" />
-              <p className="text-gray-500">Nothing playing right now</p>
+              <p className="text-gray-500">{nowPlaying?.is_playing === false ? "Playback paused" : "Nothing playing right now"}</p>
             </div>
           )}
         </Card>
@@ -282,17 +311,17 @@ const GuestPage = () => {
                           variant="outline"
                           onClick={() => addTrack(track.uri)}
                           className="text-xs h-8 px-3 bg-cyan-500/10 border-cyan-500/50 text-cyan-400 hover:bg-cyan-500/20 hover:text-cyan-300"
-                          data-testid={`add-track-btn-${index}`}
+                          data-testid={`free-queue-btn-${index}`}
                         >
-                          Add 4th
+                          Free queue
                         </Button>
                         <Button
                           size="sm"
                           onClick={() => skipQueue(track.uri)}
                           className="text-xs h-8 px-3 bg-red-500/10 border border-red-500/50 text-red-400 hover:bg-red-500/20 hover:text-red-300"
-                          data-testid={`skip-queue-btn-${index}`}
+                          data-testid={`play-next-btn-${index}`}
                         >
-                          <DollarSign className="w-3 h-3 mr-1" />1 Skip
+                          <DollarSign className="w-3 h-3 mr-0.5" />1 Play next
                         </Button>
                       </div>
                     </div>
@@ -325,23 +354,39 @@ const GuestPage = () => {
                   }`}
                   data-testid={`queue-item-${index}`}
                 >
-                  <div className="w-8 h-8 rounded-full bg-[#2a2a34] flex items-center justify-center text-sm font-bold text-gray-400">
+                  {/* Position indicator */}
+                  <div className="w-10 h-10 rounded-full bg-[#2a2a34] flex items-center justify-center text-sm font-bold flex-shrink-0">
                     {index === 0 ? (
-                      <span className="text-cyan-400" data-testid="next-song-label">N</span>
-                    ) : index}
+                      <span className="text-cyan-400 text-xs" data-testid="next-song-label">Next</span>
+                    ) : (
+                      <span className="text-gray-400">{index + 1}</span>
+                    )}
                   </div>
+                  
                   {track.album_art && (
-                    <img src={track.album_art} alt="" className="w-12 h-12 rounded object-cover" />
+                    <img src={track.album_art} alt="" className="w-12 h-12 rounded object-cover flex-shrink-0" />
                   )}
+                  
                   <div className="flex-1 min-w-0">
                     <p className="text-white text-sm font-medium truncate">{track.name}</p>
                     <p className="text-gray-500 text-xs truncate">{track.artist}</p>
                   </div>
-                  {track.is_guest_request && (
-                    <span className="text-xs text-cyan-400 bg-cyan-400/10 px-2 py-1 rounded-full" data-testid="guest-request-badge">
-                      Request
-                    </span>
-                  )}
+                  
+                  <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                    {track.is_guest_request && (
+                      <span className="text-xs text-cyan-400 bg-cyan-400/10 px-2 py-0.5 rounded-full" data-testid="guest-request-badge">
+                        Request
+                      </span>
+                    )}
+                    <Button
+                      size="sm"
+                      onClick={() => moveToNext(track.uri)}
+                      className="text-xs h-7 px-2 bg-red-500/10 border border-red-500/50 text-red-400 hover:bg-red-500/20 hover:text-red-300"
+                      data-testid={`queue-play-next-btn-${index}`}
+                    >
+                      <DollarSign className="w-3 h-3 mr-0.5" />1 Play next
+                    </Button>
+                  </div>
                 </Card>
               ))}
             </div>
