@@ -305,12 +305,12 @@ const GuestPage = () => {
                         <p className="text-white text-sm font-medium truncate">{track.name}</p>
                         <p className="text-gray-500 text-xs truncate">{track.artist}</p>
                       </div>
-                      <div className="flex flex-col gap-1">
+                      <div className="flex flex-col gap-1 flex-shrink-0">
                         <Button
                           size="sm"
                           variant="outline"
                           onClick={() => addTrack(track.uri)}
-                          className="text-xs h-8 px-3 bg-cyan-500/10 border-cyan-500/50 text-cyan-400 hover:bg-cyan-500/20 hover:text-cyan-300"
+                          className="text-[10px] h-7 px-2 bg-cyan-500/10 border-cyan-500/50 text-cyan-400 hover:bg-cyan-500/20 hover:text-cyan-300 whitespace-nowrap"
                           data-testid={`free-queue-btn-${index}`}
                         >
                           Free queue
@@ -318,10 +318,10 @@ const GuestPage = () => {
                         <Button
                           size="sm"
                           onClick={() => skipQueue(track.uri)}
-                          className="text-xs h-8 px-3 bg-red-500/10 border border-red-500/50 text-red-400 hover:bg-red-500/20 hover:text-red-300"
+                          className="text-[10px] h-7 px-2 bg-red-500/10 border border-red-500/50 text-red-400 hover:bg-red-500/20 hover:text-red-300 whitespace-nowrap"
                           data-testid={`play-next-btn-${index}`}
                         >
-                          <DollarSign className="w-3 h-3 mr-0.5" />1 Play next
+                          $1 Play next
                         </Button>
                       </div>
                     </div>
