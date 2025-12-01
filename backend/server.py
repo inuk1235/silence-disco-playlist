@@ -55,11 +55,9 @@ class SearchRequest(BaseModel):
 
 class TrackRequest(BaseModel):
     track_uri: str
-
-class TokenData(BaseModel):
-    access_token: str
-    refresh_token: str
-    expires_at: datetime
+    track_name: Optional[str] = None
+    artist: Optional[str] = None
+    album_art: Optional[str] = None
 
 class NowPlayingResponse(BaseModel):
     is_playing: bool
@@ -77,6 +75,8 @@ class QueueTrack(BaseModel):
     artist: str
     album_art: Optional[str] = None
     is_guest_request: bool = False
+    is_priority: bool = False
+    position: int = 0
 
 class PlaylistInfo(BaseModel):
     name: str
@@ -170,22 +170,59 @@ async def set_last_request_position(position: int):
         upsert=True
     )
 
-async def add_guest_request(track_uri: str):
-    """Track a guest-requested song"""
-    await db.guest_requests.update_one(
-        {'uri': track_uri},
-        {'$set': {'uri': track_uri, 'requested_at': datetime.now(timezone.utc).isoformat()}},
+async def reset_last_request_position():
+    """Reset the last request position when queue changes significantly"""
+    await db.request_state.update_one(
+        {'_id': 'position'},
+        {'$set': {'position': 0}},
         upsert=True
     )
 
-async def is_guest_request(track_uri: str) -> bool:
-    """Check if a track was requested by a guest"""
-    doc = await db.guest_requests.find_one({'uri': track_uri})
+async def add_to_managed_queue(track_uri: str, track_name: str, artist: str, album_art: str, position: int, is_priority: bool = False):
+    """Add a track to our managed queue"""
+    await db.managed_queue.insert_one({
+        'uri': track_uri,
+        'name': track_name,
+        'artist': artist,
+        'album_art': album_art,
+        'position': position,
+        'is_priority': is_priority,
+        'added_at': datetime.now(timezone.utc),
+        'played': False
+    })
+
+async def get_managed_queue():
+    """Get our managed queue sorted by position"""
+    # Priority tracks first (position 0), then by position
+    cursor = db.managed_queue.find({'played': False}).sort([('is_priority', -1), ('position', 1)])
+    return await cursor.to_list(100)
+
+async def mark_track_played(track_uri: str):
+    """Mark a track as played"""
+    await db.managed_queue.update_many(
+        {'uri': track_uri},
+        {'$set': {'played': True}}
+    )
+
+async def is_in_managed_queue(track_uri: str) -> bool:
+    """Check if track is already in managed queue"""
+    doc = await db.managed_queue.find_one({'uri': track_uri, 'played': False})
     return doc is not None
 
+async def move_to_priority(track_uri: str):
+    """Move a track to priority (position 1)"""
+    await db.managed_queue.update_one(
+        {'uri': track_uri, 'played': False},
+        {'$set': {'is_priority': True, 'position': 0}}
+    )
+
+async def cleanup_old_queue_entries():
+    """Remove old played entries"""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+    await db.managed_queue.delete_many({'played': True, 'added_at': {'$lt': cutoff}})
+
 async def check_no_repeat_rule(track_uri: str) -> tuple[bool, str]:
-    """Check if a track was played/queued in the last hour. Returns (can_add, error_message)"""
-    # Extract track ID from URI (spotify:track:XXXXX)
+    """Check if a track was played/queued in the last hour"""
     track_id = track_uri.split(':')[-1] if ':' in track_uri else track_uri
     
     doc = await db.track_history.find_one({'track_id': track_id})
@@ -196,7 +233,6 @@ async def check_no_repeat_rule(track_uri: str) -> tuple[bool, str]:
     if not last_time:
         return True, ""
     
-    # Parse the timestamp
     if isinstance(last_time, str):
         last_time = datetime.fromisoformat(last_time.replace('Z', '+00:00'))
     
@@ -221,6 +257,17 @@ async def record_track_play(track_uri: str):
         }},
         upsert=True
     )
+
+async def get_spotify_queue_length():
+    """Get the current Spotify queue length"""
+    try:
+        response = await spotify_request('GET', '/me/player/queue')
+        if response.status_code == 200:
+            data = response.json()
+            return len(data.get('queue', []))
+    except:
+        pass
+    return 0
 
 # Routes
 @api_router.get("/")
@@ -270,6 +317,10 @@ async def spotify_callback(code: str = Query(...), error: str = Query(None)):
         data = response.json()
         await store_tokens(data['access_token'], data['refresh_token'], data['expires_in'])
         
+        # Reset queue state on new auth
+        await reset_last_request_position()
+        await db.managed_queue.delete_many({})
+        
         return RedirectResponse(url="/admin?auth=success")
 
 @api_router.get("/spotify/status")
@@ -296,7 +347,6 @@ async def get_playlist_info():
         data = response.json()
         name = data.get('name', 'Silent Disco')
         
-        # Determine color based on playlist name (case-insensitive)
         name_lower = name.lower()
         if 'on red' in name_lower:
             color = '#ff3b3b'
@@ -322,7 +372,6 @@ async def get_now_playing():
             return NowPlayingResponse(is_playing=False)
         
         if response.status_code != 200:
-            logger.error(f"Now playing error: {response.status_code} - {response.text}")
             return NowPlayingResponse(is_playing=False)
         
         data = response.json()
@@ -334,6 +383,11 @@ async def get_now_playing():
         duration = track.get('duration_ms', 0)
         progress = data.get('progress_ms', 0)
         
+        # Mark this track as played in our managed queue
+        track_uri = track.get('uri')
+        if track_uri:
+            await mark_track_played(track_uri)
+        
         return NowPlayingResponse(
             is_playing=data.get('is_playing', False),
             song_name=track.get('name'),
@@ -342,7 +396,7 @@ async def get_now_playing():
             duration_ms=duration,
             progress_ms=progress,
             time_left_ms=duration - progress if duration and progress else None,
-            track_uri=track.get('uri')
+            track_uri=track_uri
         )
     except HTTPException:
         raise
@@ -352,27 +406,52 @@ async def get_now_playing():
 
 @api_router.get("/spotify/queue")
 async def get_queue():
-    """Get the playback queue"""
+    """Get the combined queue (priority requests first, then Spotify queue)"""
     try:
+        # Get Spotify's actual queue
         response = await spotify_request('GET', '/me/player/queue')
         
-        if response.status_code != 200:
-            logger.error(f"Queue error: {response.status_code} - {response.text}")
-            return {"queue": []}
+        spotify_queue = []
+        if response.status_code == 200:
+            data = response.json()
+            spotify_queue = data.get('queue', [])
         
-        data = response.json()
-        queue_items = data.get('queue', [])
+        # Get our managed requests
+        managed = await get_managed_queue()
+        managed_uris = {m['uri'] for m in managed}
         
+        # Build combined queue
         result = []
-        for track in queue_items:
-            is_request = await is_guest_request(track.get('uri', ''))
+        position = 1
+        
+        # First, add priority requests (paid $1 Play Next)
+        priority_tracks = [m for m in managed if m.get('is_priority')]
+        for track in priority_tracks:
             result.append(QueueTrack(
-                uri=track.get('uri', ''),
+                uri=track['uri'],
+                name=track['name'],
+                artist=track['artist'],
+                album_art=track.get('album_art'),
+                is_guest_request=True,
+                is_priority=True,
+                position=position
+            ))
+            position += 1
+        
+        # Then add Spotify queue tracks, marking guest requests
+        for track in spotify_queue:
+            uri = track.get('uri', '')
+            is_request = uri in managed_uris
+            result.append(QueueTrack(
+                uri=uri,
                 name=track.get('name', 'Unknown'),
                 artist=', '.join([a['name'] for a in track.get('artists', [])]),
                 album_art=track['album']['images'][0]['url'] if track.get('album', {}).get('images') else None,
-                is_guest_request=is_request
+                is_guest_request=is_request,
+                is_priority=False,
+                position=position
             ))
+            position += 1
         
         return {"queue": [t.model_dump() for t in result]}
     except HTTPException:
@@ -391,7 +470,6 @@ async def search_tracks(request: SearchRequest):
         )
         
         if response.status_code != 200:
-            logger.error(f"Search error: {response.status_code} - {response.text}")
             return {"tracks": []}
         
         data = response.json()
@@ -415,37 +493,34 @@ async def search_tracks(request: SearchRequest):
 
 @api_router.post("/spotify/add-track")
 async def add_track(request: TrackRequest):
-    """Add a track to the queue using 4th position rule (Free Queue)"""
+    """Add a track using the 4th position rule (Free Queue)"""
     try:
         # Check 1-hour no-repeat rule
         can_add, error_msg = await check_no_repeat_rule(request.track_uri)
         if not can_add:
             raise HTTPException(status_code=400, detail=error_msg)
         
-        # Get current queue to determine position
-        queue_response = await spotify_request('GET', '/me/player/queue')
-        queue_length = 0
+        # Check if already in queue
+        if await is_in_managed_queue(request.track_uri):
+            raise HTTPException(status_code=400, detail="This song is already in the queue!")
         
-        if queue_response.status_code == 200:
-            queue_data = queue_response.json()
-            queue_length = len(queue_data.get('queue', []))
+        # Get current Spotify queue length
+        queue_length = await get_spotify_queue_length()
         
         # Calculate position using 4th position rule
-        # Position is relative to currently playing (position 1 = next song)
         last_position = await get_last_request_position()
         
         if last_position == 0:
-            # First request - position 4
+            # First free request - insert at position 4
             target_position = 4
         else:
             # Subsequent requests - last_position + 4
             target_position = last_position + 4
         
-        # If calculated position > queue length, append at end
-        if target_position > queue_length:
-            target_position = queue_length + 1
+        # If calculated position > queue length + 1, append at end
+        actual_position = min(target_position, queue_length + 1)
         
-        # Add to queue (Spotify API adds to end of queue)
+        # Add to Spotify queue (always goes to end)
         add_response = await spotify_request(
             'POST',
             f'/me/player/queue?uri={urllib.parse.quote(request.track_uri)}'
@@ -455,16 +530,32 @@ async def add_track(request: TrackRequest):
             logger.error(f"Add track error: {add_response.status_code} - {add_response.text}")
             raise HTTPException(status_code=400, detail="Failed to add track to queue")
         
-        # Update last request position
-        await set_last_request_position(target_position)
+        # Update last request position to the actual position
+        await set_last_request_position(actual_position)
         
-        # Track this as a guest request
-        await add_guest_request(request.track_uri)
+        # Add to our managed queue
+        await add_to_managed_queue(
+            track_uri=request.track_uri,
+            track_name=request.track_name or "Unknown",
+            artist=request.artist or "Unknown",
+            album_art=request.album_art or "",
+            position=actual_position,
+            is_priority=False
+        )
         
         # Record for no-repeat rule
         await record_track_play(request.track_uri)
         
-        return {"success": True, "position": target_position, "message": f"Track added to queue at position {target_position}!"}
+        # Cleanup old entries
+        await cleanup_old_queue_entries()
+        
+        logger.info(f"Free queue: Added track at position {actual_position} (last_position was {last_position}, queue_length was {queue_length})")
+        
+        return {
+            "success": True, 
+            "position": actual_position, 
+            "message": f"Added to queue at position {actual_position}!"
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -473,16 +564,20 @@ async def add_track(request: TrackRequest):
 
 @api_router.post("/spotify/skip-paid")
 async def skip_paid(request: TrackRequest):
-    """Add track to position 1 (next up) - for paid skips. Does NOT update last_request_position."""
+    """Add track to position 1 (next up) - for paid $1 Play Next"""
     try:
         # Check 1-hour no-repeat rule
         can_add, error_msg = await check_no_repeat_rule(request.track_uri)
         if not can_add:
             raise HTTPException(status_code=400, detail=error_msg)
         
-        # Add to queue (goes to end, then would need reordering)
-        # Note: Spotify's Web API doesn't support direct position insertion
-        # The track is added and marked as priority
+        # Check if already in queue
+        if await is_in_managed_queue(request.track_uri):
+            # If already in queue, just make it priority
+            await move_to_priority(request.track_uri)
+            return {"success": True, "message": "Track moved to play next!"}
+        
+        # Add to Spotify queue
         add_response = await spotify_request(
             'POST',
             f'/me/player/queue?uri={urllib.parse.quote(request.track_uri)}'
@@ -492,14 +587,24 @@ async def skip_paid(request: TrackRequest):
             logger.error(f"Skip paid error: {add_response.status_code} - {add_response.text}")
             raise HTTPException(status_code=400, detail="Failed to add track to queue")
         
-        # Track as guest request
-        await add_guest_request(request.track_uri)
+        # Add to managed queue as PRIORITY (position 1)
+        await add_to_managed_queue(
+            track_uri=request.track_uri,
+            track_name=request.track_name or "Unknown",
+            artist=request.artist or "Unknown",
+            album_art=request.album_art or "",
+            position=0,  # Priority position
+            is_priority=True
+        )
         
         # Record for no-repeat rule
         await record_track_play(request.track_uri)
         
-        # NOTE: last_request_position is NOT updated for paid skips
-        return {"success": True, "message": "Track added as next up!"}
+        # NOTE: Do NOT update last_request_position for paid skips
+        
+        logger.info(f"Paid skip: Added track as priority (position 1)")
+        
+        return {"success": True, "message": "Track will play next!"}
     except HTTPException:
         raise
     except Exception as e:
@@ -508,21 +613,33 @@ async def skip_paid(request: TrackRequest):
 
 @api_router.post("/spotify/move-to-next")
 async def move_to_next(request: TrackRequest):
-    """Move an existing track in queue to position 1 (paid skip from queue list)"""
+    """Move an existing track to position 1 (paid skip from queue list)"""
     try:
         # Check 1-hour no-repeat rule
         can_add, error_msg = await check_no_repeat_rule(request.track_uri)
         if not can_add:
             raise HTTPException(status_code=400, detail=error_msg)
         
-        # Record for no-repeat rule (refresh the timestamp)
+        # Check if in our managed queue
+        if await is_in_managed_queue(request.track_uri):
+            await move_to_priority(request.track_uri)
+        else:
+            # Add to managed queue as priority
+            await add_to_managed_queue(
+                track_uri=request.track_uri,
+                track_name=request.track_name or "Unknown",
+                artist=request.artist or "Unknown",
+                album_art=request.album_art or "",
+                position=0,
+                is_priority=True
+            )
+        
+        # Record for no-repeat rule (refresh timestamp)
         await record_track_play(request.track_uri)
         
-        # Note: Spotify Web API doesn't support reordering the playback queue directly
-        # The track is already in queue, we mark it as priority
-        # In a real implementation, this would require using the playlist API if working with playlists
+        logger.info(f"Move to next: Track marked as priority")
         
-        return {"success": True, "message": "Track marked as priority!"}
+        return {"success": True, "message": "Track will play next!"}
     except HTTPException:
         raise
     except Exception as e:
@@ -535,6 +652,13 @@ async def get_config():
     return {
         "square_payment_link": SQUARE_PAYMENT_LINK
     }
+
+@api_router.post("/admin/reset-queue-state")
+async def reset_queue_state():
+    """Admin endpoint to reset the queue tracking state"""
+    await reset_last_request_position()
+    await db.managed_queue.delete_many({})
+    return {"success": True, "message": "Queue state reset"}
 
 # Include the router in the main app
 app.include_router(api_router)

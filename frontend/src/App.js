@@ -123,9 +123,14 @@ const GuestPage = () => {
   }, [searchQuery, handleSearch]);
 
   // Add track to queue (Free Queue - 4th position rule)
-  const addTrack = async (trackUri) => {
+  const addTrack = async (track) => {
     try {
-      const response = await axios.post(`${API}/spotify/add-track`, { track_uri: trackUri });
+      const response = await axios.post(`${API}/spotify/add-track`, { 
+        track_uri: track.uri,
+        track_name: track.name,
+        artist: track.artist,
+        album_art: track.album_art
+      });
       toast.success(response.data.message || "Track added to queue!");
       setSearchQuery("");
       setSearchResults([]);
@@ -137,13 +142,18 @@ const GuestPage = () => {
   };
 
   // Skip queue (paid) - from search results
-  const skipQueue = async (trackUri) => {
+  const skipQueue = async (track) => {
     // Open payment link
     window.open(squareLink, "_blank");
     // Add track as priority
     try {
-      const response = await axios.post(`${API}/spotify/skip-paid`, { track_uri: trackUri });
-      toast.success(response.data.message || "Track added as next up!");
+      const response = await axios.post(`${API}/spotify/skip-paid`, { 
+        track_uri: track.uri,
+        track_name: track.name,
+        artist: track.artist,
+        album_art: track.album_art
+      });
+      toast.success(response.data.message || "Track will play next!");
       setSearchQuery("");
       setSearchResults([]);
     } catch (e) {
@@ -154,13 +164,18 @@ const GuestPage = () => {
   };
 
   // Move existing queue track to next (paid)
-  const moveToNext = async (trackUri) => {
+  const moveToNext = async (track) => {
     // Open payment link
     window.open(squareLink, "_blank");
     // Move track to position 1
     try {
-      const response = await axios.post(`${API}/spotify/move-to-next`, { track_uri: trackUri });
-      toast.success(response.data.message || "Track moved to next!");
+      const response = await axios.post(`${API}/spotify/move-to-next`, { 
+        track_uri: track.uri,
+        track_name: track.name,
+        artist: track.artist,
+        album_art: track.album_art
+      });
+      toast.success(response.data.message || "Track will play next!");
     } catch (e) {
       console.error("Error moving track:", e);
       const errorMsg = e.response?.data?.detail || "Failed to move track";
@@ -311,7 +326,7 @@ const GuestPage = () => {
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => addTrack(track.uri)}
+                          onClick={() => addTrack(track)}
                           className="text-xs h-8 flex-1 bg-cyan-500/10 border-cyan-500/50 text-cyan-400 hover:bg-cyan-500/20 hover:text-cyan-300"
                           data-testid={`free-queue-btn-${index}`}
                         >
@@ -319,7 +334,7 @@ const GuestPage = () => {
                         </Button>
                         <Button
                           size="sm"
-                          onClick={() => skipQueue(track.uri)}
+                          onClick={() => skipQueue(track)}
                           className="text-xs h-8 flex-1 bg-red-500/10 border border-red-500/50 text-red-400 hover:bg-red-500/20 hover:text-red-300"
                           data-testid={`play-next-btn-${index}`}
                         >
@@ -353,13 +368,19 @@ const GuestPage = () => {
                     track.is_guest_request 
                       ? "border-cyan-400/50 shadow-[0_0_15px_rgba(0,240,255,0.2)]" 
                       : "border-[#2a2a3a]"
+                  } ${
+                    track.is_priority ? "border-red-400/50 shadow-[0_0_15px_rgba(255,59,59,0.3)]" : ""
                   }`}
                   data-testid={`queue-item-${index}`}
                 >
                   {/* Position indicator */}
-                  <div className="w-10 h-10 rounded-full bg-[#2a2a34] flex items-center justify-center text-sm font-bold flex-shrink-0">
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 ${
+                    track.is_priority ? "bg-red-500/20" : "bg-[#2a2a34]"
+                  }`}>
                     {index === 0 ? (
-                      <span className="text-cyan-400 text-xs" data-testid="next-song-label">Next</span>
+                      <span className={track.is_priority ? "text-red-400 text-xs" : "text-cyan-400 text-xs"} data-testid="next-song-label">
+                        Next
+                      </span>
                     ) : (
                       <span className="text-gray-400">{index + 1}</span>
                     )}
@@ -375,14 +396,19 @@ const GuestPage = () => {
                   </div>
                   
                   <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                    {track.is_guest_request && (
+                    {track.is_priority && (
+                      <span className="text-xs text-red-400 bg-red-400/10 px-2 py-0.5 rounded-full" data-testid="priority-badge">
+                        Priority
+                      </span>
+                    )}
+                    {track.is_guest_request && !track.is_priority && (
                       <span className="text-xs text-cyan-400 bg-cyan-400/10 px-2 py-0.5 rounded-full" data-testid="guest-request-badge">
                         Request
                       </span>
                     )}
                     <Button
                       size="sm"
-                      onClick={() => moveToNext(track.uri)}
+                      onClick={() => moveToNext(track)}
                       className="text-xs h-7 px-2 bg-red-500/10 border border-red-500/50 text-red-400 hover:bg-red-500/20 hover:text-red-300"
                       data-testid={`queue-play-next-btn-${index}`}
                     >
@@ -430,6 +456,15 @@ const AdminPage = () => {
     window.location.href = `${API}/spotify/auth`;
   };
 
+  const handleResetQueue = async () => {
+    try {
+      await axios.post(`${API}/admin/reset-queue-state`);
+      toast.success("Queue state reset!");
+    } catch (e) {
+      toast.error("Failed to reset queue state");
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-[#0a0a0f] to-[#12121a] flex items-center justify-center">
@@ -440,6 +475,7 @@ const AdminPage = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-[#0a0a0f] to-[#12121a] flex items-center justify-center p-4">
+      <Toaster position="top-center" theme="dark" />
       <Card className="bg-[#1a1a24] border-[#2a2a3a] p-8 text-center max-w-md w-full">
         <Headphones className="w-16 h-16 mx-auto mb-4 text-cyan-400" />
         <h1 className="text-2xl font-bold text-white mb-2" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
@@ -452,14 +488,24 @@ const AdminPage = () => {
               <p className="text-green-400 font-medium">Spotify Connected!</p>
             </div>
             <p className="text-gray-400 text-sm mb-4">The app is ready for guests to request songs.</p>
-            <Button 
-              variant="outline" 
-              onClick={() => window.location.href = "/"}
-              className="border-cyan-500/50 text-cyan-400 hover:bg-cyan-500/10"
-              data-testid="go-to-guest-btn"
-            >
-              Go to Guest View
-            </Button>
+            <div className="space-y-3">
+              <Button 
+                variant="outline" 
+                onClick={() => window.location.href = "/"}
+                className="w-full border-cyan-500/50 text-cyan-400 hover:bg-cyan-500/10"
+                data-testid="go-to-guest-btn"
+              >
+                Go to Guest View
+              </Button>
+              <Button 
+                variant="outline" 
+                onClick={handleResetQueue}
+                className="w-full border-orange-500/50 text-orange-400 hover:bg-orange-500/10"
+                data-testid="reset-queue-btn"
+              >
+                Reset Queue Position Tracking
+              </Button>
+            </div>
           </>
         ) : (
           <>
