@@ -327,7 +327,7 @@ const GuestPage = () => {
                           size="sm"
                           variant="outline"
                           onClick={() => addTrack(track)}
-                          className="text-xs h-8 flex-1 bg-cyan-500/10 border-cyan-500/50 text-cyan-400 hover:bg-cyan-500/20 hover:text-cyan-300"
+                          className="text-xs h-8 flex-1 rounded-full bg-cyan-500/15 border-cyan-500/60 text-cyan-400 hover:bg-cyan-500/25 hover:text-cyan-300 hover:border-cyan-400 shadow-[0_0_10px_rgba(0,240,255,0.15)] hover:shadow-[0_0_15px_rgba(0,240,255,0.25)]"
                           data-testid={`free-queue-btn-${index}`}
                         >
                           Free queue
@@ -335,7 +335,7 @@ const GuestPage = () => {
                         <Button
                           size="sm"
                           onClick={() => skipQueue(track)}
-                          className="text-xs h-8 flex-1 bg-red-500/10 border border-red-500/50 text-red-400 hover:bg-red-500/20 hover:text-red-300"
+                          className="text-xs h-8 flex-1 rounded-full bg-red-500/20 border border-red-500/60 text-red-400 hover:bg-red-500/30 hover:text-red-300 hover:border-red-400 shadow-[0_0_10px_rgba(255,59,59,0.2)] hover:shadow-[0_0_15px_rgba(255,59,59,0.3)]"
                           data-testid={`play-next-btn-${index}`}
                         >
                           $1 Play next
