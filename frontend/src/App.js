@@ -406,14 +406,16 @@ const GuestPage = () => {
                         Request
                       </span>
                     )}
-                    <Button
-                      size="sm"
-                      onClick={() => moveToNext(track)}
-                      className="text-xs h-7 px-2 bg-red-500/10 border border-red-500/50 text-red-400 hover:bg-red-500/20 hover:text-red-300"
-                      data-testid={`queue-play-next-btn-${index}`}
-                    >
-                      <DollarSign className="w-3 h-3 mr-0.5" />1 Play next
-                    </Button>
+                    {!track.is_priority && (
+                      <Button
+                        size="sm"
+                        onClick={() => moveToNext(track)}
+                        className="text-xs h-8 px-4 rounded-full bg-red-500/20 border border-red-500/60 text-red-400 hover:bg-red-500/30 hover:text-red-300 hover:border-red-400 shadow-[0_0_10px_rgba(255,59,59,0.2)] hover:shadow-[0_0_15px_rgba(255,59,59,0.3)]"
+                        data-testid={`queue-play-next-btn-${index}`}
+                      >
+                        <DollarSign className="w-3 h-3 mr-1" />1 Play next
+                      </Button>
+                    )}
                   </div>
                 </Card>
               ))}
