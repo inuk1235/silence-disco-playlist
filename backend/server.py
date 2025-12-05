@@ -162,9 +162,17 @@ async def get_cooldown_minutes_left(track_uri: str) -> int:
     if not doc:
         return 0
     last_time = doc.get('timestamp')
+    if not last_time:
+        return 0
+    
+    # Handle different datetime formats
     if isinstance(last_time, str):
         last_time = datetime.fromisoformat(last_time.replace('Z', '+00:00'))
-    time_diff = (datetime.now(timezone.utc) - last_time).total_seconds()
+    elif last_time.tzinfo is None:
+        last_time = last_time.replace(tzinfo=timezone.utc)
+    
+    now = datetime.now(timezone.utc)
+    time_diff = (now - last_time).total_seconds()
     if time_diff < COOLDOWN_SECONDS:
         return int((COOLDOWN_SECONDS - time_diff) / 60)
     return 0
