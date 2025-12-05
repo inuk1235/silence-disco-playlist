@@ -301,10 +301,8 @@ const GuestPage = () => {
                   <Card
                     key={track.uri + index}
                     className={`bg-[#1a1a24] border p-3 flex items-center gap-3 transition-all ${
-                      track.is_guest_request && !track.in_cooldown
-                        ? "border-cyan-400/50 shadow-[0_0_15px_rgba(0,240,255,0.2)]"
-                        : track.in_cooldown
-                        ? "border-[#2a2a3a] opacity-50"
+                      track.is_guest_request
+                        ? "border-cyan-400/60 shadow-[0_0_20px_rgba(0,240,255,0.25)]"
                         : "border-[#2a2a3a]"
                     }`}
                     data-testid={`queue-item-${index}`}
@@ -323,23 +321,15 @@ const GuestPage = () => {
                     )}
 
                     <div className="flex-1 min-w-0">
-                      <p className={`text-sm font-medium truncate ${track.in_cooldown ? 'text-gray-500' : 'text-white'}`}>{track.name}</p>
-                      <p className="text-gray-500 text-xs truncate">{track.artist}</p>
+                      <p className="text-white text-sm font-medium truncate">{track.name}</p>
+                      <p className="text-gray-400 text-xs truncate">{track.artist}</p>
                     </div>
 
-                    <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                      {track.is_guest_request && (
-                        <span className="text-xs text-cyan-400 bg-cyan-400/10 px-2 py-0.5 rounded-full" data-testid="guest-request-badge">
-                          Request
-                        </span>
-                      )}
-                      {track.in_cooldown && (
-                        <span className="text-xs text-gray-400 flex items-center gap-1">
-                          <Clock className="w-3 h-3" />
-                          {track.cooldown_minutes}m
-                        </span>
-                      )}
-                    </div>
+                    {track.is_guest_request && (
+                      <span className="text-xs text-cyan-400 bg-cyan-400/15 px-2.5 py-1 rounded-full border border-cyan-400/30" data-testid="guest-request-badge">
+                        Request
+                      </span>
+                    )}
                   </Card>
                 ))}
               </div>
