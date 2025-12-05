@@ -115,10 +115,17 @@ async def check_cooldown(track_uri: str) -> tuple[bool, str]:
         return True, ""
     
     last_time = doc.get('timestamp')
+    if not last_time:
+        return True, ""
+    
+    # Handle different datetime formats
     if isinstance(last_time, str):
         last_time = datetime.fromisoformat(last_time.replace('Z', '+00:00'))
+    elif last_time.tzinfo is None:
+        last_time = last_time.replace(tzinfo=timezone.utc)
     
-    time_diff = (datetime.now(timezone.utc) - last_time).total_seconds()
+    now = datetime.now(timezone.utc)
+    time_diff = (now - last_time).total_seconds()
     if time_diff < COOLDOWN_SECONDS:
         mins_left = int((COOLDOWN_SECONDS - time_diff) / 60)
         return False, f"This song was played recently. Try again in {mins_left} minutes!"
