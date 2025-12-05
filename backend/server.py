@@ -348,11 +348,30 @@ async def search_tracks(request: SearchRequest):
         data = response.json()
         tracks = data.get('tracks', {}).get('items', [])
         
+        # Batch fetch: Get all track IDs
+        track_ids = [track.get('uri', '').split(':')[-1] for track in tracks if track.get('uri')]
+        
+        # Batch query for cooldowns
+        cooldown_cursor = db.track_cooldown.find({'track_id': {'$in': track_ids}})
+        cooldown_map = {}
+        now = datetime.now(timezone.utc)
+        async for doc in cooldown_cursor:
+            last_time = doc.get('timestamp')
+            if last_time:
+                if isinstance(last_time, str):
+                    last_time = datetime.fromisoformat(last_time.replace('Z', '+00:00'))
+                elif last_time.tzinfo is None:
+                    last_time = last_time.replace(tzinfo=timezone.utc)
+                time_diff = (now - last_time).total_seconds()
+                if time_diff < COOLDOWN_SECONDS:
+                    cooldown_map[doc['track_id']] = int((COOLDOWN_SECONDS - time_diff) / 60)
+        
         result = []
         for track in tracks:
             uri = track.get('uri', '')
-            in_cooldown = await is_in_cooldown(uri)
-            cooldown_mins = await get_cooldown_minutes_left(uri) if in_cooldown else 0
+            track_id = uri.split(':')[-1] if ':' in uri else uri
+            cooldown_mins = cooldown_map.get(track_id, 0)
+            in_cooldown = cooldown_mins > 0
             
             result.append({
                 'uri': uri,
