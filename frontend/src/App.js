@@ -241,30 +241,34 @@ const GuestPage = () => {
                   {searchResults.map((track, index) => (
                     <div
                       key={track.uri + index}
-                      className={`p-3 rounded-lg transition-colors ${track.in_cooldown ? 'opacity-50' : 'hover:bg-[#2a2a34]'}`}
+                      className={`p-3 rounded-lg transition-colors ${track.in_cooldown ? 'opacity-60' : 'hover:bg-[#2a2a34]'}`}
                       data-testid={`search-result-${index}`}
                     >
                       <div className="flex items-center gap-3">
                         {track.album_art && (
-                          <img src={track.album_art} alt="" className="w-12 h-12 rounded object-cover flex-shrink-0" />
+                          <img src={track.album_art} alt="" className="w-11 h-11 rounded object-cover flex-shrink-0" />
                         )}
                         <div className="flex-1 min-w-0">
                           <p className={`text-sm font-medium truncate ${track.in_cooldown ? 'text-gray-500' : 'text-white'}`}>{track.name}</p>
                           <p className="text-gray-500 text-xs truncate">{track.artist}</p>
-                          {track.in_cooldown && (
-                            <p className="text-red-400 text-xs flex items-center gap-1 mt-1">
-                              <Clock className="w-3 h-3" />
-                              Played recently ({track.cooldown_minutes}m left)
-                            </p>
-                          )}
                         </div>
+                      </div>
+                      <div className="mt-2 ml-14 flex items-center justify-between">
+                        {track.in_cooldown ? (
+                          <p className="text-red-400 text-xs flex items-center gap-1">
+                            <Clock className="w-3 h-3" />
+                            Played recently ({track.cooldown_minutes}m left)
+                          </p>
+                        ) : (
+                          <div />
+                        )}
                         <Button
                           size="sm"
                           onClick={() => addTrack(track)}
                           disabled={track.in_cooldown}
-                          className={`text-xs h-9 px-4 rounded-full transition-all ${
+                          className={`text-xs h-8 px-4 rounded-full transition-all ${
                             track.in_cooldown
-                              ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                              ? 'bg-gray-700/50 text-gray-500 cursor-not-allowed border-gray-600'
                               : 'bg-cyan-500/20 border border-cyan-500/60 text-cyan-400 hover:bg-cyan-500/30 hover:text-cyan-300 hover:border-cyan-400 shadow-[0_0_10px_rgba(0,240,255,0.15)] hover:shadow-[0_0_15px_rgba(0,240,255,0.25)]'
                           }`}
                           data-testid={`add-queue-btn-${index}`}
