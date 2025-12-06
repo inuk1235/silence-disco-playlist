@@ -308,8 +308,8 @@ const GuestPage = () => {
 
           {/* Search Results Dropdown */}
           {searchResults.length > 0 && (
-            <Card className="absolute z-50 w-full mt-2 bg-[#1a1a24] border-[#2a2a3a] max-h-80 sm:max-h-96 overflow-hidden" data-testid="search-results">
-              <ScrollArea className="h-full max-h-80 sm:max-h-96">
+            <Card className="absolute z-50 w-full mt-2 bg-[#1a1a24] border-[#2a2a3a] overflow-hidden" data-testid="search-results">
+              <div className="max-h-[60vh] overflow-y-auto overscroll-contain">
                 <div className="p-2 space-y-1">
                   {searchResults.map((track, index) => {
                     const isDisabled = track.in_cooldown || track.recently_added;
@@ -318,51 +318,48 @@ const GuestPage = () => {
                     return (
                       <div
                         key={track.uri + index}
-                        className={`p-2 sm:p-3 rounded-lg transition-colors ${isDisabled ? 'opacity-60' : 'hover:bg-[#2a2a34]'}`}
+                        className={`p-2 rounded-lg transition-colors ${isDisabled ? 'opacity-60' : 'hover:bg-[#2a2a34]'}`}
                         data-testid={`search-result-${index}`}
                       >
-                        <div className="flex items-center gap-2 sm:gap-3">
+                        <div className="flex items-center gap-2">
                           {track.album_art && (
-                            <img src={track.album_art} alt="" className="w-10 h-10 sm:w-11 sm:h-11 rounded object-cover flex-shrink-0" />
+                            <img src={track.album_art} alt="" className="w-10 h-10 rounded object-cover flex-shrink-0" />
                           )}
-                          <div className="flex-1 min-w-0">
-                            <p className={`text-xs sm:text-sm font-medium truncate ${isDisabled ? 'text-gray-500' : 'text-white'}`}>{track.name}</p>
-                            <p className="text-gray-500 text-[10px] sm:text-xs truncate">{track.artist}</p>
+                          <div className="flex-1 min-w-0 mr-2">
+                            <p className={`text-sm font-medium truncate ${isDisabled ? 'text-gray-500' : 'text-white'}`}>{track.name}</p>
+                            <p className="text-gray-500 text-xs truncate">{track.artist}</p>
+                            {track.in_cooldown && (
+                              <p className="text-red-400 text-[10px] flex items-center gap-1 mt-0.5">
+                                <Clock className="w-3 h-3" />
+                                Played recently ({track.cooldown_minutes}m)
+                              </p>
+                            )}
+                            {track.recently_added && !track.in_cooldown && (
+                              <p className="text-cyan-400 text-[10px] flex items-center gap-1 mt-0.5">
+                                <CheckCircle className="w-3 h-3" />
+                                Just added
+                              </p>
+                            )}
                           </div>
-                        </div>
-                        <div className="mt-2 ml-12 sm:ml-14 flex items-center justify-between gap-2">
-                          {track.in_cooldown ? (
-                            <p className="text-red-400 text-[10px] sm:text-xs flex items-center gap-1">
-                              <Clock className="w-3 h-3" />
-                              Played recently ({track.cooldown_minutes}m)
-                            </p>
-                          ) : track.recently_added ? (
-                            <p className="text-cyan-400 text-[10px] sm:text-xs flex items-center gap-1">
-                              <CheckCircle className="w-3 h-3" />
-                              Just added
-                            </p>
-                          ) : (
-                            <div />
-                          )}
                           <Button
                             size="sm"
                             onClick={() => addTrack(track)}
                             disabled={isDisabled || isAdding}
-                            className={`text-[10px] sm:text-xs h-7 sm:h-8 px-3 sm:px-4 rounded-full transition-all flex-shrink-0 ${
+                            className={`text-xs h-8 px-3 rounded-full flex-shrink-0 whitespace-nowrap ${
                               isDisabled
                                 ? 'bg-gray-700/50 text-gray-500 cursor-not-allowed border-gray-600'
                                 : isAdding
                                 ? 'bg-cyan-500/30 text-cyan-300 border-cyan-400'
-                                : 'bg-cyan-500/20 border border-cyan-500/60 text-cyan-400 hover:bg-cyan-500/30 hover:text-cyan-300 hover:border-cyan-400 shadow-[0_0_10px_rgba(0,240,255,0.15)] hover:shadow-[0_0_15px_rgba(0,240,255,0.25)]'
+                                : 'bg-cyan-500/20 border border-cyan-500/60 text-cyan-400 hover:bg-cyan-500/30 hover:text-cyan-300'
                             }`}
                             data-testid={`add-queue-btn-${index}`}
                           >
                             {isAdding ? (
-                              <><Loader2 className="w-3 h-3 mr-1 animate-spin" /> Adding...</>
+                              <Loader2 className="w-3 h-3 animate-spin" />
                             ) : isDisabled ? (
                               track.recently_added ? 'Added' : 'Cooldown'
                             ) : (
-                              'Add to queue'
+                              'Add'
                             )}
                           </Button>
                         </div>
@@ -370,7 +367,7 @@ const GuestPage = () => {
                     );
                   })}
                 </div>
-              </ScrollArea>
+              </div>
             </Card>
           )}
         </div>
