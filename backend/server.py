@@ -117,7 +117,7 @@ async def spotify_request(method: str, endpoint: str, **kwargs):
 async def check_cooldown(track_uri: str) -> tuple[bool, str]:
     """Check if track is in cooldown. Returns (can_add, error_message)"""
     track_id = track_uri.split(':')[-1] if ':' in track_uri else track_uri
-    doc = await db.track_cooldown.find_one({'track_id': track_id})
+    doc = await db.track_cooldown.find_one({'track_id': track_id}, {'_id': 0, 'track_id': 1, 'timestamp': 1})
     if not doc:
         return True, ""
     
