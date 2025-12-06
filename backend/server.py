@@ -148,7 +148,7 @@ async def check_duplicate_lock(track_uri: str) -> tuple[bool, str]:
             return False, "This song is already being added. Please wait."
     
     # Check database for recent additions
-    doc = await db.recent_additions.find_one({'track_id': track_id})
+    doc = await db.recent_additions.find_one({'track_id': track_id}, {'_id': 0, 'track_id': 1, 'added_at': 1})
     if doc:
         added_time = doc.get('added_at')
         if added_time:
