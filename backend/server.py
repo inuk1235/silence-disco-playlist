@@ -385,7 +385,7 @@ async def search_tracks(request: SearchRequest):
         track_uris = [track.get('uri', '') for track in tracks if track.get('uri')]
         
         # Batch query for cooldowns
-        cooldown_cursor = db.track_cooldown.find({'track_id': {'$in': track_ids}})
+        cooldown_cursor = db.track_cooldown.find({'track_id': {'$in': track_ids}}, {'_id': 0, 'track_id': 1, 'timestamp': 1})
         cooldown_map = {}
         now = datetime.now(timezone.utc)
         async for doc in cooldown_cursor:
@@ -400,7 +400,7 @@ async def search_tracks(request: SearchRequest):
                     cooldown_map[doc['track_id']] = int((COOLDOWN_SECONDS - time_diff) / 60)
         
         # Batch query for recent additions (duplicate prevention)
-        recent_cursor = db.recent_additions.find({'track_id': {'$in': track_ids}})
+        recent_cursor = db.recent_additions.find({'track_id': {'$in': track_ids}}, {'_id': 0, 'track_id': 1, 'added_at': 1})
         recent_map = {}
         async for doc in recent_cursor:
             added_time = doc.get('added_at')
