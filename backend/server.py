@@ -73,7 +73,7 @@ class NowPlayingResponse(BaseModel):
 
 # Helper functions
 async def get_stored_tokens():
-    return await db.spotify_tokens.find_one({'_id': 'main'})
+    return await db.spotify_tokens.find_one({'_id': 'main'}, {'_id': 1, 'access_token': 1, 'refresh_token': 1, 'expires_at': 1})
 
 async def store_tokens(access_token: str, refresh_token: str, expires_in: int):
     expires_at = datetime.now(timezone.utc).timestamp() + expires_in - 60
