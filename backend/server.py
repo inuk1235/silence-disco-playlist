@@ -330,11 +330,11 @@ async def get_queue():
         track_ids = [uri.split(':')[-1] if ':' in uri else uri for uri in track_uris]
         
         # Batch query for guest requests
-        guest_requests_cursor = db.guest_requests.find({'uri': {'$in': track_uris}})
+        guest_requests_cursor = db.guest_requests.find({'uri': {'$in': track_uris}}, {'_id': 0, 'uri': 1})
         guest_request_uris = {doc['uri'] async for doc in guest_requests_cursor}
         
         # Batch query for cooldowns
-        cooldown_cursor = db.track_cooldown.find({'track_id': {'$in': track_ids}})
+        cooldown_cursor = db.track_cooldown.find({'track_id': {'$in': track_ids}}, {'_id': 0, 'track_id': 1, 'timestamp': 1})
         cooldown_map = {}
         now = datetime.now(timezone.utc)
         async for doc in cooldown_cursor:
