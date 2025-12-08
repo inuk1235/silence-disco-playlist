@@ -12,6 +12,7 @@ from datetime import datetime, timezone, timedelta
 import httpx
 import base64
 import urllib.parse
+import asyncio
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -34,11 +35,17 @@ SPOTIFY_API_URL = 'https://api.spotify.com/v1'
 # Cooldown: 1 hour in seconds
 COOLDOWN_SECONDS = 3600
 
+# Duplicate prevention: Lock time in seconds (prevents rapid clicks)
+DUPLICATE_LOCK_SECONDS = 30
+
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# In-memory lock for preventing duplicate submissions
+pending_requests = {}
 
 # Models
 class SearchRequest(BaseModel):
@@ -66,7 +73,7 @@ class NowPlayingResponse(BaseModel):
 
 # Helper functions
 async def get_stored_tokens():
-    return await db.spotify_tokens.find_one({'_id': 'main'})
+    return await db.spotify_tokens.find_one({'_id': 'main'}, {'_id': 1, 'access_token': 1, 'refresh_token': 1, 'expires_at': 1})
 
 async def store_tokens(access_token: str, refresh_token: str, expires_in: int):
     expires_at = datetime.now(timezone.utc).timestamp() + expires_in - 60
@@ -110,7 +117,7 @@ async def spotify_request(method: str, endpoint: str, **kwargs):
 async def check_cooldown(track_uri: str) -> tuple[bool, str]:
     """Check if track is in cooldown. Returns (can_add, error_message)"""
     track_id = track_uri.split(':')[-1] if ':' in track_uri else track_uri
-    doc = await db.track_cooldown.find_one({'track_id': track_id})
+    doc = await db.track_cooldown.find_one({'track_id': track_id}, {'_id': 0, 'track_id': 1, 'timestamp': 1})
     if not doc:
         return True, ""
     
@@ -118,7 +125,6 @@ async def check_cooldown(track_uri: str) -> tuple[bool, str]:
     if not last_time:
         return True, ""
     
-    # Handle different datetime formats
     if isinstance(last_time, str):
         last_time = datetime.fromisoformat(last_time.replace('Z', '+00:00'))
     elif last_time.tzinfo is None:
@@ -130,6 +136,48 @@ async def check_cooldown(track_uri: str) -> tuple[bool, str]:
         mins_left = int((COOLDOWN_SECONDS - time_diff) / 60)
         return False, f"This song was played recently. Try again in {mins_left} minutes!"
     return True, ""
+
+async def check_duplicate_lock(track_uri: str) -> tuple[bool, str]:
+    """Check if track is currently being added (prevent rapid duplicate clicks)"""
+    track_id = track_uri.split(':')[-1] if ':' in track_uri else track_uri
+    
+    # Check in-memory lock first (for very rapid clicks)
+    if track_id in pending_requests:
+        lock_time = pending_requests[track_id]
+        if (datetime.now(timezone.utc) - lock_time).total_seconds() < 5:
+            return False, "This song is already being added. Please wait."
+    
+    # Check database for recent additions
+    doc = await db.recent_additions.find_one({'track_id': track_id}, {'_id': 0, 'track_id': 1, 'added_at': 1})
+    if doc:
+        added_time = doc.get('added_at')
+        if added_time:
+            if isinstance(added_time, str):
+                added_time = datetime.fromisoformat(added_time.replace('Z', '+00:00'))
+            elif added_time.tzinfo is None:
+                added_time = added_time.replace(tzinfo=timezone.utc)
+            
+            time_diff = (datetime.now(timezone.utc) - added_time).total_seconds()
+            if time_diff < DUPLICATE_LOCK_SECONDS:
+                return False, "This song was just added! Check the queue."
+    
+    return True, ""
+
+async def set_duplicate_lock(track_uri: str):
+    """Set a lock to prevent duplicate additions"""
+    track_id = track_uri.split(':')[-1] if ':' in track_uri else track_uri
+    pending_requests[track_id] = datetime.now(timezone.utc)
+    await db.recent_additions.update_one(
+        {'track_id': track_id},
+        {'$set': {'track_id': track_id, 'added_at': datetime.now(timezone.utc)}},
+        upsert=True
+    )
+
+async def release_duplicate_lock(track_uri: str):
+    """Release the in-memory lock"""
+    track_id = track_uri.split(':')[-1] if ':' in track_uri else track_uri
+    if track_id in pending_requests:
+        del pending_requests[track_id]
 
 async def set_cooldown(track_uri: str):
     """Set cooldown timestamp for a track"""
@@ -148,34 +196,19 @@ async def add_guest_request(track_uri: str, track_name: str, artist: str, album_
         upsert=True
     )
 
-async def is_guest_request(track_uri: str) -> bool:
-    doc = await db.guest_requests.find_one({'uri': track_uri})
-    return doc is not None
-
-async def is_in_cooldown(track_uri: str) -> bool:
-    can_add, _ = await check_cooldown(track_uri)
-    return not can_add
-
-async def get_cooldown_minutes_left(track_uri: str) -> int:
-    track_id = track_uri.split(':')[-1] if ':' in track_uri else track_uri
-    doc = await db.track_cooldown.find_one({'track_id': track_id})
-    if not doc:
-        return 0
-    last_time = doc.get('timestamp')
-    if not last_time:
-        return 0
-    
-    # Handle different datetime formats
-    if isinstance(last_time, str):
-        last_time = datetime.fromisoformat(last_time.replace('Z', '+00:00'))
-    elif last_time.tzinfo is None:
-        last_time = last_time.replace(tzinfo=timezone.utc)
-    
-    now = datetime.now(timezone.utc)
-    time_diff = (now - last_time).total_seconds()
-    if time_diff < COOLDOWN_SECONDS:
-        return int((COOLDOWN_SECONDS - time_diff) / 60)
-    return 0
+async def get_queue_position(track_uri: str) -> int:
+    """Get the position of a track in the current queue"""
+    try:
+        response = await spotify_request('GET', '/me/player/queue')
+        if response.status_code == 200:
+            data = response.json()
+            queue_items = data.get('queue', [])
+            for i, track in enumerate(queue_items):
+                if track.get('uri') == track_uri:
+                    return i + 1  # 1-indexed position
+        return -1
+    except:
+        return -1
 
 # Routes
 @api_router.get("/")
@@ -290,18 +323,18 @@ async def get_queue():
             return {"queue": []}
         
         data = response.json()
-        queue_items = data.get('queue', [])[:25]  # Limit to 25
+        queue_items = data.get('queue', [])[:25]
         
-        # Batch fetch: Get all track URIs
+        # Batch fetch
         track_uris = [track.get('uri', '') for track in queue_items]
         track_ids = [uri.split(':')[-1] if ':' in uri else uri for uri in track_uris]
         
         # Batch query for guest requests
-        guest_requests_cursor = db.guest_requests.find({'uri': {'$in': track_uris}})
+        guest_requests_cursor = db.guest_requests.find({'uri': {'$in': track_uris}}, {'_id': 0, 'uri': 1})
         guest_request_uris = {doc['uri'] async for doc in guest_requests_cursor}
         
         # Batch query for cooldowns
-        cooldown_cursor = db.track_cooldown.find({'track_id': {'$in': track_ids}})
+        cooldown_cursor = db.track_cooldown.find({'track_id': {'$in': track_ids}}, {'_id': 0, 'track_id': 1, 'timestamp': 1})
         cooldown_map = {}
         now = datetime.now(timezone.utc)
         async for doc in cooldown_cursor:
@@ -348,11 +381,11 @@ async def search_tracks(request: SearchRequest):
         data = response.json()
         tracks = data.get('tracks', {}).get('items', [])
         
-        # Batch fetch: Get all track IDs
         track_ids = [track.get('uri', '').split(':')[-1] for track in tracks if track.get('uri')]
+        track_uris = [track.get('uri', '') for track in tracks if track.get('uri')]
         
         # Batch query for cooldowns
-        cooldown_cursor = db.track_cooldown.find({'track_id': {'$in': track_ids}})
+        cooldown_cursor = db.track_cooldown.find({'track_id': {'$in': track_ids}}, {'_id': 0, 'track_id': 1, 'timestamp': 1})
         cooldown_map = {}
         now = datetime.now(timezone.utc)
         async for doc in cooldown_cursor:
@@ -366,12 +399,27 @@ async def search_tracks(request: SearchRequest):
                 if time_diff < COOLDOWN_SECONDS:
                     cooldown_map[doc['track_id']] = int((COOLDOWN_SECONDS - time_diff) / 60)
         
+        # Batch query for recent additions (duplicate prevention)
+        recent_cursor = db.recent_additions.find({'track_id': {'$in': track_ids}}, {'_id': 0, 'track_id': 1, 'added_at': 1})
+        recent_map = {}
+        async for doc in recent_cursor:
+            added_time = doc.get('added_at')
+            if added_time:
+                if isinstance(added_time, str):
+                    added_time = datetime.fromisoformat(added_time.replace('Z', '+00:00'))
+                elif added_time.tzinfo is None:
+                    added_time = added_time.replace(tzinfo=timezone.utc)
+                time_diff = (now - added_time).total_seconds()
+                if time_diff < DUPLICATE_LOCK_SECONDS:
+                    recent_map[doc['track_id']] = True
+        
         result = []
         for track in tracks:
             uri = track.get('uri', '')
             track_id = uri.split(':')[-1] if ':' in uri else uri
             cooldown_mins = cooldown_map.get(track_id, 0)
             in_cooldown = cooldown_mins > 0
+            recently_added = recent_map.get(track_id, False)
             
             result.append({
                 'uri': uri,
@@ -379,7 +427,8 @@ async def search_tracks(request: SearchRequest):
                 'artist': ', '.join([a['name'] for a in track.get('artists', [])]),
                 'album_art': track['album']['images'][0]['url'] if track.get('album', {}).get('images') else None,
                 'in_cooldown': in_cooldown,
-                'cooldown_minutes': cooldown_mins
+                'cooldown_minutes': cooldown_mins,
+                'recently_added': recently_added
             })
         
         return {"tracks": result}
@@ -390,30 +439,62 @@ async def search_tracks(request: SearchRequest):
 @api_router.post("/spotify/add-track")
 async def add_track(request: TrackRequest):
     try:
-        # Check cooldown
+        # Check cooldown first
         can_add, error_msg = await check_cooldown(request.track_uri)
         if not can_add:
             raise HTTPException(status_code=400, detail=error_msg)
         
-        # Add to Spotify queue
-        response = await spotify_request('POST', f'/me/player/queue?uri={urllib.parse.quote(request.track_uri)}')
+        # Check duplicate lock (prevent rapid clicks)
+        can_add, error_msg = await check_duplicate_lock(request.track_uri)
+        if not can_add:
+            raise HTTPException(status_code=400, detail=error_msg)
         
-        if response.status_code not in [200, 204]:
-            logger.error(f"Add track error: {response.status_code} - {response.text}")
-            raise HTTPException(status_code=400, detail="Failed to add track to queue")
+        # Set lock immediately to prevent concurrent requests
+        await set_duplicate_lock(request.track_uri)
         
-        # Track as guest request
-        await add_guest_request(
-            track_uri=request.track_uri,
-            track_name=request.track_name or "Unknown",
-            artist=request.artist or "Unknown",
-            album_art=request.album_art or ""
-        )
-        
-        # Set cooldown
-        await set_cooldown(request.track_uri)
-        
-        return {"success": True, "message": "Added to queue!"}
+        try:
+            # Add to Spotify queue
+            response = await spotify_request('POST', f'/me/player/queue?uri={urllib.parse.quote(request.track_uri)}')
+            
+            if response.status_code not in [200, 204]:
+                await release_duplicate_lock(request.track_uri)
+                error_data = response.json() if response.content else {}
+                error_reason = error_data.get('error', {}).get('reason', '')
+                if error_reason == 'NO_ACTIVE_DEVICE':
+                    raise HTTPException(status_code=400, detail="No active Spotify player. Please start playing music first.")
+                logger.error(f"Add track error: {response.status_code} - {response.text}")
+                raise HTTPException(status_code=400, detail="Failed to add track to queue")
+            
+            # Track as guest request
+            await add_guest_request(
+                track_uri=request.track_uri,
+                track_name=request.track_name or "Unknown",
+                artist=request.artist or "Unknown",
+                album_art=request.album_art or ""
+            )
+            
+            # Set cooldown
+            await set_cooldown(request.track_uri)
+            
+            # Get queue position
+            await asyncio.sleep(0.5)  # Small delay for Spotify to update
+            position = await get_queue_position(request.track_uri)
+            
+            position_text = f" at position #{position}" if position > 0 else ""
+            
+            return {
+                "success": True, 
+                "message": f"Added to queue{position_text}!",
+                "position": position,
+                "track_name": request.track_name,
+                "artist": request.artist
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            await release_duplicate_lock(request.track_uri)
+            raise e
+            
     except HTTPException:
         raise
     except Exception as e:

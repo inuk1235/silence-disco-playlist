@@ -20,8 +20,8 @@ body {
 
 /* Custom scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 4px;
+  height: 4px;
 }
 
 ::-webkit-scrollbar-track {
@@ -30,7 +30,7 @@ body {
 
 ::-webkit-scrollbar-thumb {
   background: #3a3a4a;
-  border-radius: 3px;
+  border-radius: 2px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -45,6 +45,48 @@ button, input {
 /* Focus states */
 input:focus {
   outline: none;
+}
+
+/* Success overlay animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes pulseGlow {
+  0%, 100% {
+    box-shadow: 0 0 20px rgba(0, 240, 255, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 40px rgba(0, 240, 255, 0.6);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out forwards;
+}
+
+.animate-scale-in {
+  animation: scaleIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+.animate-pulse-glow {
+  animation: pulseGlow 1.5s ease-in-out infinite;
 }
 
 /* Party glow animation for guest requests */
@@ -86,4 +128,11 @@ input:focus {
 
 .hide-scrollbar::-webkit-scrollbar {
   display: none;
+}
+
+/* Responsive text sizes */
+@media (max-width: 360px) {
+  .text-responsive-sm {
+    font-size: 0.75rem;
+  }
 }
