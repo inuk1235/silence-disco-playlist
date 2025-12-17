@@ -1,12 +1,14 @@
 import httpx
 import base64
 import urllib.parse
+import logging
 from datetime import datetime, timezone
 from fastapi import HTTPException
 from .config import get_settings
 from .database import db
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 SPOTIFY_AUTH_URL = 'https://accounts.spotify.com/authorize'
 SPOTIFY_TOKEN_URL = 'https://accounts.spotify.com/api/token'
@@ -69,6 +71,7 @@ def get_auth_url():
 
 async def exchange_code_for_token(code: str):
     auth_header = base64.b64encode(f"{settings.spotify_client_id}:{settings.spotify_client_secret}".encode()).decode()
+    logger.info(f"Exchanging code for token with redirect_uri: {settings.spotify_redirect_uri}")
     async with httpx.AsyncClient() as http_client:
         response = await http_client.post(
             SPOTIFY_TOKEN_URL,
@@ -76,6 +79,9 @@ async def exchange_code_for_token(code: str):
             data={'grant_type': 'authorization_code', 'code': code, 'redirect_uri': settings.spotify_redirect_uri}
         )
         if response.status_code != 200:
-            raise HTTPException(status_code=400, detail="Failed to exchange code for token")
+            error_detail = response.text
+            logger.error(f"Spotify token exchange failed: {response.status_code} - {error_detail}")
+            raise HTTPException(status_code=400, detail=f"Failed to exchange code for token: {error_detail}")
         data = response.json()
         await store_tokens(data['access_token'], data['refresh_token'], data['expires_in'])
+
