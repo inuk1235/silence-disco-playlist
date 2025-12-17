@@ -42,8 +42,14 @@ async def spotify_callback(code: str = Query(...), error: str = Query(None)):
     if error:
         raise HTTPException(status_code=400, detail=f"OAuth error: {error}")
     
-    await exchange_code_for_token(code)
-    return RedirectResponse(url="/admin?auth=success")
+    try:
+        await exchange_code_for_token(code)
+        return RedirectResponse(url="/admin?auth=success")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Callback error: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"Callback error: {type(e).__name__}: {str(e)}")
 
 @router.get("/spotify/status")
 async def spotify_status():
