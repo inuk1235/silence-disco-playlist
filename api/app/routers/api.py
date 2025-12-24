@@ -25,6 +25,7 @@ from ..services import (
     COOLDOWN_SECONDS, 
     DUPLICATE_LOCK_SECONDS
 )
+from ..cache import AsyncTTLCache
 
 router = APIRouter(prefix="/api")
 logger = logging.getLogger(__name__)
@@ -63,6 +64,7 @@ async def spotify_status():
         return {"authenticated": False}
 
 @router.get("/spotify/playlist-info")
+@AsyncTTLCache(ttl=600)
 async def get_playlist_info():
     try:
         response = await spotify_request('GET', f'/playlists/{settings.spotify_playlist_id}')
@@ -85,6 +87,7 @@ async def get_playlist_info():
         return PlaylistInfo(name="Silent Disco", color="#ffffff")
 
 @router.get("/spotify/now-playing")
+@AsyncTTLCache(ttl=1)
 async def get_now_playing():
     try:
         response = await spotify_request('GET', '/me/player/currently-playing')
@@ -123,6 +126,7 @@ async def get_now_playing():
         return NowPlayingResponse(is_playing=False)
 
 @router.get("/spotify/queue")
+@AsyncTTLCache(ttl=2)
 async def get_queue():
     try:
         response = await spotify_request('GET', '/me/player/queue')
